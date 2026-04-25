@@ -64,6 +64,13 @@ export default function SongScreen() {
     };
   }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Explicitly load audio when src changes — required on iOS Safari
+  useEffect(() => {
+    if (audioUrl && audioRef.current) {
+      audioRef.current.load();
+    }
+  }, [audioUrl]);
+
   // Smooth time display via rAF
   const tick = useCallback(() => {
     if (audioRef.current && !scrubbing.current) {
@@ -104,7 +111,7 @@ export default function SongScreen() {
     setTimeout(() => setToast(null), 2500);
   }
 
-  async function togglePlay() {
+  function togglePlay() {
     const audio = audioRef.current;
     if (!audio || !audioUrl) return;
     if (isPlaying) {
@@ -112,27 +119,32 @@ export default function SongScreen() {
       setIsPlaying(false);
       releaseWakeLock();
     } else {
-      try {
-        await audio.play();
-        setIsPlaying(true);
-        acquireWakeLock();
-      } catch (e) {
-        showToast('Playback failed. Try tapping again.');
-        console.error(e);
+      // Call play() synchronously inside the gesture handler — iOS requires this
+      const p = audio.play();
+      if (p !== undefined) {
+        p.then(() => {
+          setIsPlaying(true);
+          acquireWakeLock();
+        }).catch((e) => {
+          showToast('Playback failed. Try tapping again.');
+          console.error(e);
+        });
       }
     }
   }
 
-  async function jumpToCue(cue: Cue) {
+  function jumpToCue(cue: Cue) {
     const audio = audioRef.current;
     if (!audio || !audioUrl) return;
     audio.currentTime = cue.timeSeconds;
     if (!isPlaying) {
-      try {
-        await audio.play();
-        setIsPlaying(true);
-        acquireWakeLock();
-      } catch { /* user gesture required on some browsers */ }
+      const p = audio.play();
+      if (p !== undefined) {
+        p.then(() => {
+          setIsPlaying(true);
+          acquireWakeLock();
+        }).catch(() => {});
+      }
     }
   }
 
@@ -255,16 +267,9 @@ export default function SongScreen() {
   async function handleExportCues() {
     if (!song || song.cues.length === 0) { showToast('No cues to export.'); return; }
     const text = song.cues.map((c) => `${formatTime(c.timeSeconds)} ${c.label}`).join('\n');
-    const filename = `${song.title} - cues.txt`;
-    if (navigator.share) {
-      try {
-        await navigator.share({ title: filename, text });
-        return;
-      } catch { /* user cancelled or share failed — fall through to clipboard */ }
-    }
     try {
       await navigator.clipboard.writeText(text);
-      showToast('Cues copied to clipboard');
+      showToast('Copied!');
     } catch {
       showToast('Could not copy. Try a different browser.');
     }
