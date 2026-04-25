@@ -114,7 +114,7 @@ export default function LibraryScreen() {
       <input
         ref={fileInputRef}
         type="file"
-        accept="audio/*"
+        accept="audio/*,.mp3,.m4a,.aac,.wav,.flac,.ogg,.opus"
         className="hidden"
         onChange={handleFileChange}
       />
