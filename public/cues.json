@@ -2,11 +2,19 @@
   "id": "shared-henna-2026",
   "title": "ריקוד חינה",
   "audioUrl": "/audio/Hinna-Shiraz-mixdown.mp3",
-  "duration": 0,
+  "duration": 359,
   "cues": [
-    { "id": "c1", "label": "פתיחה", "timeSeconds": 0 },
-    { "id": "c2", "label": "ריקוד הורים", "timeSeconds": 60 },
-    { "id": "c3", "label": "ילדים", "timeSeconds": 120 }
+    { "id": "c1", "label": "הורים - שמש", "timeSeconds": 40 },
+    { "id": "c2", "label": "אחים - התחלה", "timeSeconds": 80 },
+    { "id": "c3", "label": "אחים - הלו הלו", "timeSeconds": 113 },
+    { "id": "c4", "label": "אחים - חלק מהיר", "timeSeconds": 129 },
+    { "id": "c5", "label": "שירז ואסף - התחלה", "timeSeconds": 164 },
+    { "id": "c6", "label": "שירז - סולו", "timeSeconds": 245 },
+    { "id": "c7", "label": "שירז - פיתות", "timeSeconds": 285 },
+    { "id": "c8", "label": "אחים - נכנסים חזרה", "timeSeconds": 297 },
+    { "id": "c9", "label": "אסף - נכנס חזרה", "timeSeconds": 309 },
+    { "id": "c10", "label": "כולם - נכנסים בסיבוב", "timeSeconds": 320 },
+    { "id": "c11", "label": "כולם - פיתות", "timeSeconds": 333 }
   ],
-  "updatedAt": 1745740800000
+  "updatedAt": 1745798400000
 }
