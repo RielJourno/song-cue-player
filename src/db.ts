@@ -25,12 +25,17 @@ function getDB() {
 export async function getAllSongs(): Promise<Song[]> {
   const db = await getDB();
   const songs = await db.getAll('songs');
-  return songs.sort((a, b) => (b.lastPlayedAt ?? b.createdAt) - (a.lastPlayedAt ?? a.createdAt));
+  // Backfill source field for records created before v2
+  return songs
+    .map((s) => (s.source ? s : { ...s, source: 'local' as const }))
+    .sort((a, b) => (b.lastPlayedAt ?? b.createdAt) - (a.lastPlayedAt ?? a.createdAt));
 }
 
 export async function getSong(id: string): Promise<Song | undefined> {
   const db = await getDB();
-  return db.get('songs', id);
+  const song = await db.get('songs', id);
+  if (song && !song.source) return { ...song, source: 'local' };
+  return song;
 }
 
 export async function saveSong(song: Song): Promise<void> {

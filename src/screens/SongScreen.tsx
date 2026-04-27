@@ -1,15 +1,18 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useStore } from '../store';
 import { getSong } from '../db';
-import type { Song, Cue } from '../types';
+import type { Song, Cue, SharedSongJSON } from '../types';
 import { formatTime, parseTimeInput } from '../utils';
 import Toast from '../components/Toast';
 
 export default function SongScreen() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { updateSong, removeSong } = useStore();
+  const [searchParams] = useSearchParams();
+  const authorMode = searchParams.get('author') === '1';
+
+  const { updateSong, removeSong, sharedSong, updateSharedSongCues } = useStore();
 
   const [song, setSong] = useState<Song | null>(null);
   const [notFound, setNotFound] = useState(false);
@@ -25,34 +28,49 @@ export default function SongScreen() {
   const [editCueLabel, setEditCueLabel] = useState('');
   const [editCueTime, setEditCueTime] = useState('');
   const [newInlineCue, setNewInlineCue] = useState<Cue | null>(null);
-  const [showDeleteSong, setShowDeleteSong] = useState(false);
+  const [showOptions, setShowOptions] = useState(false);
   const [manualLabel, setManualLabel] = useState('');
   const [manualTime, setManualTime] = useState('');
   const [showImportDialog, setShowImportDialog] = useState(false);
   const [importText, setImportText] = useState('');
 
-  // audioRef is always mounted — we never conditionally render <audio>
   const audioRef = useRef<HTMLAudioElement>(null);
   const objectUrlRef = useRef<string | null>(null);
   const wakeLockRef = useRef<WakeLockSentinel | null>(null);
   const animFrameRef = useRef<number>(0);
   const scrubbing = useRef(false);
 
-  // Load song from IndexedDB and build object URL
+  const isShared = song?.source === 'shared';
+  // Can edit if: local song, or shared song in author mode
+  const canEdit = !isShared || authorMode;
+
+  // Load song — shared songs come from store, local from IndexedDB
   useEffect(() => {
     if (!id) return;
     let revoked = false;
+
+    // Check if this is the shared song
+    if (sharedSong && id === sharedSong.id) {
+      setSong(sharedSong);
+      setTitleValue(sharedSong.title);
+      setDuration(sharedSong.duration);
+      setAudioUrl(sharedSong.audioUrl ?? null);
+      return;
+    }
+
+    // Local song from IndexedDB
     getSong(id).then((s) => {
       if (!s) { setNotFound(true); return; }
-      const url = URL.createObjectURL(s.audioBlob);
+      const url = URL.createObjectURL(s.audioBlob!);
       if (revoked) { URL.revokeObjectURL(url); return; }
       objectUrlRef.current = url;
       setSong(s);
       setTitleValue(s.title);
       setDuration(s.duration);
-      setAudioUrl(url); // triggers <audio src=...> via state
+      setAudioUrl(url);
       updateSong({ ...s, lastPlayedAt: Date.now() });
     });
+
     return () => {
       revoked = true;
       if (objectUrlRef.current) {
@@ -62,16 +80,22 @@ export default function SongScreen() {
       cancelAnimationFrame(animFrameRef.current);
       releaseWakeLock();
     };
-  }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [id, sharedSong]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Explicitly load audio when src changes — required on iOS Safari
+  // Keep local song state in sync when sharedSong updates (author mode edits)
+  useEffect(() => {
+    if (song?.source === 'shared' && sharedSong && sharedSong.id === song.id) {
+      setSong(sharedSong);
+    }
+  }, [sharedSong]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Explicit load required on iOS Safari when src changes
   useEffect(() => {
     if (audioUrl && audioRef.current) {
       audioRef.current.load();
     }
   }, [audioUrl]);
 
-  // Smooth time display via rAF
   const tick = useCallback(() => {
     if (audioRef.current && !scrubbing.current) {
       setCurrentTime(audioRef.current.currentTime);
@@ -119,7 +143,6 @@ export default function SongScreen() {
       setIsPlaying(false);
       releaseWakeLock();
     } else {
-      // Call play() synchronously inside the gesture handler — iOS requires this
       const p = audio.play();
       if (p !== undefined) {
         p.then(() => {
@@ -156,9 +179,14 @@ export default function SongScreen() {
     setCurrentTime(t);
   }
 
+  // Persist depending on source
   async function persistSong(updated: Song) {
     setSong(updated);
-    await updateSong(updated);
+    if (updated.source === 'shared') {
+      updateSharedSongCues(updated);
+    } else {
+      await updateSong(updated);
+    }
   }
 
   async function submitTitle() {
@@ -208,12 +236,10 @@ export default function SongScreen() {
 
   async function submitImport() {
     if (!song) return;
-    // Accept lines like: "1:23 Label", "1:23 - Label", "83 Label"
     const lines = importText.split('\n').map((l) => l.trim()).filter(Boolean);
     const newCues: Cue[] = [];
     const failed: string[] = [];
     for (const line of lines) {
-      // Match leading timestamp: digits:digits or plain digits, then the rest is the label
       const match = line.match(/^(\d{1,2}:\d{2}|\d+)\s*[-–]?\s*(.+)$/);
       if (!match) { failed.push(line); continue; }
       const t = parseTimeInput(match[1]);
@@ -226,7 +252,7 @@ export default function SongScreen() {
     setShowImportDialog(false);
     setImportText('');
     const msg = failed.length > 0
-      ? `Added ${newCues.length} cue${newCues.length > 1 ? 's' : ''}. ${failed.length} line${failed.length > 1 ? 's' : ''} skipped.`
+      ? `Added ${newCues.length} cue${newCues.length > 1 ? 's' : ''}. ${failed.length} skipped.`
       : `Added ${newCues.length} cue${newCues.length > 1 ? 's' : ''}`;
     showToast(msg);
   }
@@ -275,14 +301,32 @@ export default function SongScreen() {
     }
   }
 
+  // Author mode: export full cues.json to clipboard
+  async function handleExportCuesJson() {
+    if (!song) return;
+    const json: SharedSongJSON = {
+      id: song.id,
+      title: song.title,
+      audioUrl: song.audioUrl ?? '/audio/Hinna-Shiraz-mixdown.mp3',
+      duration: duration || song.duration,
+      cues: song.cues,
+      updatedAt: Date.now(),
+    };
+    const text = JSON.stringify(json, null, 2);
+    try {
+      await navigator.clipboard.writeText(text);
+      showToast('Copied. Paste into public/cues.json and commit.');
+    } catch {
+      showToast('Could not copy. Try a different browser.');
+    }
+    setShowOptions(false);
+  }
+
   const progressPct = duration > 0 ? (currentTime / duration) * 100 : 0;
 
   return (
     <div className="flex flex-col h-full bg-[#0a0a0a] text-white">
-      {/*
-        <audio> is ALWAYS rendered here so audioRef is never null.
-        src is driven by state so React controls the assignment timing.
-      */}
+      {/* <audio> always in DOM — src driven by state */}
       <audio
         ref={audioRef}
         src={audioUrl ?? undefined}
@@ -304,7 +348,7 @@ export default function SongScreen() {
           </svg>
         </button>
 
-        {editingTitle ? (
+        {editingTitle && canEdit ? (
           <input
             autoFocus
             className="flex-1 bg-transparent text-white text-lg font-semibold outline-none border-b border-amber-500 pb-0.5"
@@ -319,14 +363,21 @@ export default function SongScreen() {
         ) : (
           <button
             className="flex-1 text-left text-lg font-semibold text-white truncate"
-            onClick={() => setEditingTitle(true)}
+            onClick={() => canEdit && setEditingTitle(true)}
           >
             {song?.title ?? '…'}
           </button>
         )}
 
+        {/* Author mode badge */}
+        {isShared && authorMode && (
+          <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-amber-500/30 text-amber-400 uppercase tracking-wide flex-shrink-0">
+            Author
+          </span>
+        )}
+
         <button
-          onClick={() => setShowDeleteSong(true)}
+          onClick={() => setShowOptions(true)}
           className="w-10 h-10 flex items-center justify-center text-white/40 active:text-white"
           aria-label="Song options"
         >
@@ -356,7 +407,6 @@ export default function SongScreen() {
               <span>{formatTime(duration)}</span>
             </div>
 
-            {/* Progress bar */}
             <div className="relative">
               <input
                 type="range"
@@ -383,7 +433,6 @@ export default function SongScreen() {
               ))}
             </div>
 
-            {/* Play/Pause */}
             <div className="flex justify-center mt-2">
               <button
                 onClick={togglePlay}
@@ -408,7 +457,9 @@ export default function SongScreen() {
           {/* Cue list */}
           <div className="flex-1 overflow-y-auto px-4">
             {song.cues.length === 0 && (
-              <p className="text-white/30 text-sm text-center py-6">No cues yet. Tap "+ Add cue" below.</p>
+              <p className="text-white/30 text-sm text-center py-6">
+                {canEdit ? 'No cues yet. Tap "+ Add cue" below.' : 'No cues.'}
+              </p>
             )}
             <ul className="flex flex-col gap-2 pb-4">
               {song.cues.map((cue) => (
@@ -422,6 +473,7 @@ export default function SongScreen() {
                   ) : (
                     <CueButton
                       cue={cue}
+                      canEdit={canEdit}
                       onTap={() => jumpToCue(cue)}
                       onEdit={() => openCueEdit(cue)}
                       onDelete={() => deleteCue(cue)}
@@ -432,32 +484,32 @@ export default function SongScreen() {
             </ul>
           </div>
 
-          {/* Bottom bar */}
-          <div
-            className="border-t border-white/10 bg-[#0a0a0a] px-4 pt-3 flex gap-2"
-            style={{ paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom))' }}
-          >
-            <button
-              onClick={addCueAtCurrentTime}
-              className="flex-1 min-h-[52px] bg-amber-500 text-black font-semibold rounded-xl active:scale-95 transition-transform text-sm"
+          {/* Bottom bar — hidden for read-only shared songs */}
+          {canEdit && (
+            <div
+              className="border-t border-white/10 bg-[#0a0a0a] px-4 pt-3 flex gap-2"
+              style={{ paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom))' }}
             >
-              + Add cue at {formatTime(currentTime)}
-            </button>
-            <button
-              onClick={() => { setManualLabel(''); setManualTime(''); setShowManualDialog(true); }}
-              className="min-h-[52px] px-3 bg-white/10 text-white rounded-xl active:bg-white/20 text-sm"
-              title="Add one cue manually"
-            >
-              Manual
-            </button>
-            <button
-              onClick={() => { setImportText(''); setShowImportDialog(true); }}
-              className="min-h-[52px] px-3 bg-white/10 text-white rounded-xl active:bg-white/20 text-sm"
-              title="Import cues from text"
-            >
-              Import
-            </button>
-          </div>
+              <button
+                onClick={addCueAtCurrentTime}
+                className="flex-1 min-h-[52px] bg-amber-500 text-black font-semibold rounded-xl active:scale-95 transition-transform text-sm"
+              >
+                + Add cue at {formatTime(currentTime)}
+              </button>
+              <button
+                onClick={() => { setManualLabel(''); setManualTime(''); setShowManualDialog(true); }}
+                className="min-h-[52px] px-3 bg-white/10 text-white rounded-xl active:bg-white/20 text-sm"
+              >
+                Manual
+              </button>
+              <button
+                onClick={() => { setImportText(''); setShowImportDialog(true); }}
+                className="min-h-[52px] px-3 bg-white/10 text-white rounded-xl active:bg-white/20 text-sm"
+              >
+                Import
+              </button>
+            </div>
+          )}
         </>
       )}
 
@@ -526,7 +578,7 @@ export default function SongScreen() {
         </div>
       )}
 
-      {/* Import cues dialog */}
+      {/* Import dialog */}
       {showImportDialog && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-5">
           <div className="w-full max-w-sm bg-[#1a1a1a] rounded-2xl p-5 flex flex-col gap-4">
@@ -551,29 +603,46 @@ export default function SongScreen() {
         </div>
       )}
 
-      {/* Song options sheet */}
-      {showDeleteSong && (
-        <div className="fixed inset-0 z-50 flex items-end bg-black/60" onClick={() => setShowDeleteSong(false)}>
+      {/* Options sheet */}
+      {showOptions && (
+        <div className="fixed inset-0 z-50 flex items-end bg-black/60" onClick={() => setShowOptions(false)}>
           <div className="w-full bg-[#1a1a1a] rounded-t-2xl p-4 pb-8" onClick={(e) => e.stopPropagation()}>
             <div className="text-white/50 text-sm text-center mb-4 px-4 truncate">"{song?.title}"</div>
+
+            {/* Author mode: export cues.json */}
+            {isShared && authorMode && (
+              <button
+                className="w-full text-left py-4 px-4 text-amber-400 text-base rounded-xl active:bg-white/10"
+                onClick={handleExportCuesJson}
+              >
+                Export cues.json
+              </button>
+            )}
+
+            {/* Export plain text cues — always available */}
             <button
               className="w-full text-left py-4 px-4 text-white text-base rounded-xl active:bg-white/10"
-              onClick={() => { setShowDeleteSong(false); handleExportCues(); }}
+              onClick={() => { setShowOptions(false); handleExportCues(); }}
             >
               <span className="flex items-center gap-3">
                 <span className="text-lg">↗</span>
                 Export cues
               </span>
             </button>
-            <button
-              className="w-full text-left py-4 px-4 text-red-400 text-base rounded-xl active:bg-white/10"
-              onClick={handleDeleteSong}
-            >
-              Delete song
-            </button>
+
+            {/* Delete — only for local songs */}
+            {!isShared && (
+              <button
+                className="w-full text-left py-4 px-4 text-red-400 text-base rounded-xl active:bg-white/10"
+                onClick={handleDeleteSong}
+              >
+                Delete song
+              </button>
+            )}
+
             <button
               className="w-full text-left py-4 px-4 text-white/50 text-base rounded-xl active:bg-white/10"
-              onClick={() => setShowDeleteSong(false)}
+              onClick={() => setShowOptions(false)}
             >
               Cancel
             </button>
@@ -586,56 +655,52 @@ export default function SongScreen() {
   );
 }
 
-function CueButton({ cue, onTap, onEdit, onDelete }: { cue: Cue; onTap: () => void; onEdit: () => void; onDelete: () => void }) {
+function CueButton({
+  cue, canEdit, onTap, onEdit, onDelete,
+}: {
+  cue: Cue; canEdit: boolean; onTap: () => void; onEdit: () => void; onDelete: () => void;
+}) {
   const [open, setOpen] = useState(false);
 
-  return open ? (
-    // Expanded: show Edit / Delete actions inline
-    <div className="min-h-[64px] flex items-center bg-[#1a1a1a] rounded-xl overflow-hidden">
-      <div className="flex-1 px-4 py-3">
-        <div className="text-white font-medium">{cue.label}</div>
-        <div className="text-amber-500 text-sm">{formatTime(cue.timeSeconds)}</div>
+  if (open && canEdit) {
+    return (
+      <div className="min-h-[64px] flex items-center bg-[#1a1a1a] rounded-xl overflow-hidden">
+        <div className="flex-1 px-4 py-3">
+          <div className="text-white font-medium">{cue.label}</div>
+          <div className="text-amber-500 text-sm">{formatTime(cue.timeSeconds)}</div>
+        </div>
+        <button onClick={() => { setOpen(false); onEdit(); }} className="h-full px-5 py-3 text-white/80 text-sm font-medium border-l border-white/10 active:bg-white/10">
+          Edit
+        </button>
+        <button onClick={() => { setOpen(false); onDelete(); }} className="h-full px-5 py-3 text-red-400 text-sm font-medium border-l border-white/10 active:bg-white/10">
+          Delete
+        </button>
+        <button onClick={() => setOpen(false)} className="h-full px-4 py-3 text-white/30 border-l border-white/10 active:bg-white/10" aria-label="Close">
+          ✕
+        </button>
       </div>
-      <button
-        onClick={() => { setOpen(false); onEdit(); }}
-        className="h-full px-5 py-3 text-white/80 text-sm font-medium border-l border-white/10 active:bg-white/10"
-      >
-        Edit
-      </button>
-      <button
-        onClick={() => { setOpen(false); onDelete(); }}
-        className="h-full px-5 py-3 text-red-400 text-sm font-medium border-l border-white/10 active:bg-white/10"
-      >
-        Delete
-      </button>
-      <button
-        onClick={() => setOpen(false)}
-        className="h-full px-4 py-3 text-white/30 border-l border-white/10 active:bg-white/10"
-        aria-label="Close"
-      >
-        ✕
-      </button>
-    </div>
-  ) : (
+    );
+  }
+
+  return (
     <div className="min-h-[64px] flex items-center bg-[#1a1a1a] rounded-xl overflow-hidden">
-      <button
-        onClick={onTap}
-        className="flex-1 text-left px-4 py-3 active:bg-[#252525] transition-colors"
-      >
+      <button onClick={onTap} className="flex-1 text-left px-4 py-3 active:bg-[#252525] transition-colors">
         <div className="text-white font-medium">{cue.label}</div>
         <div className="text-amber-500 text-sm">{formatTime(cue.timeSeconds)}</div>
       </button>
-      <button
-        onClick={() => setOpen(true)}
-        className="w-12 h-full flex items-center justify-center text-white/30 active:text-white border-l border-white/10 active:bg-white/10 self-stretch"
-        aria-label="Cue options"
-      >
-        <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
-          <circle cx="10" cy="5" r="1.5" />
-          <circle cx="10" cy="10" r="1.5" />
-          <circle cx="10" cy="15" r="1.5" />
-        </svg>
-      </button>
+      {canEdit && (
+        <button
+          onClick={() => setOpen(true)}
+          className="w-12 h-full flex items-center justify-center text-white/30 active:text-white border-l border-white/10 active:bg-white/10 self-stretch"
+          aria-label="Cue options"
+        >
+          <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+            <circle cx="10" cy="5" r="1.5" />
+            <circle cx="10" cy="10" r="1.5" />
+            <circle cx="10" cy="15" r="1.5" />
+          </svg>
+        </button>
+      )}
     </div>
   );
 }

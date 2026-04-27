@@ -7,7 +7,7 @@ import SongRow from '../components/SongRow';
 import Toast from '../components/Toast';
 
 export default function LibraryScreen() {
-  const { songs, loading, loadSongs, addSong, updateSong, removeSong } = useStore();
+  const { songs, sharedSong, loading, loadSongs, addSong, updateSong, removeSong } = useStore();
   const navigate = useNavigate();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
@@ -37,6 +37,7 @@ export default function LibraryScreen() {
       const song: Song = {
         id: crypto.randomUUID(),
         title,
+        source: 'local',
         audioBlob: blob,
         mimeType,
         duration,
@@ -62,6 +63,8 @@ export default function LibraryScreen() {
     showToast(`"${song.title}" deleted`);
   }
 
+  const hasLocal = songs.length > 0;
+
   return (
     <div className="flex flex-col h-full bg-[#0a0a0a] text-white">
       {/* Header */}
@@ -69,30 +72,64 @@ export default function LibraryScreen() {
         <h1 className="text-2xl font-bold tracking-tight text-white">Cue</h1>
       </header>
 
-      {/* Song list */}
       <main className="flex-1 overflow-y-auto">
         {loading ? (
           <div className="flex items-center justify-center h-32">
             <div className="w-6 h-6 border-2 border-amber-500 border-t-transparent rounded-full animate-spin" />
           </div>
-        ) : songs.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full px-8 text-center gap-3">
-            <div className="text-5xl">♪</div>
-            <p className="text-white/50 text-base">No songs yet.</p>
-            <p className="text-white/30 text-sm">Tap + to add your first.</p>
-          </div>
         ) : (
-          <ul className="divide-y divide-white/10">
-            {songs.map((song) => (
-              <SongRow
-                key={song.id}
-                song={song}
-                onTap={() => navigate(`/song/${song.id}`)}
-                onRename={(title) => handleRename(song, title)}
-                onDelete={() => handleDelete(song)}
-              />
-            ))}
-          </ul>
+          <>
+            {/* Shared song */}
+            {sharedSong && (
+              <div>
+                <button
+                  className="w-full flex items-center px-5 py-4 gap-4 cursor-pointer active:bg-white/5 select-none"
+                  onClick={() => navigate(`/song/${sharedSong.id}`)}
+                >
+                  <div className="flex-1 min-w-0 text-left">
+                    <div className="flex items-center gap-2">
+                      <span className="text-white font-medium truncate">{sharedSong.title}</span>
+                      <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-400 uppercase tracking-wide flex-shrink-0">
+                        Shared
+                      </span>
+                    </div>
+                    <div className="text-white/40 text-sm mt-0.5">
+                      {sharedSong.cues.length} {sharedSong.cues.length === 1 ? 'cue' : 'cues'}
+                    </div>
+                  </div>
+                  <svg className="w-4 h-4 text-white/30 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+                  </svg>
+                </button>
+              </div>
+            )}
+
+            {/* Divider between shared and local */}
+            {sharedSong && hasLocal && (
+              <div className="border-t border-white/10 mx-5 my-1" />
+            )}
+
+            {/* Local songs */}
+            {hasLocal ? (
+              <ul className="divide-y divide-white/10">
+                {songs.map((song) => (
+                  <SongRow
+                    key={song.id}
+                    song={song}
+                    onTap={() => navigate(`/song/${song.id}`)}
+                    onRename={(title) => handleRename(song, title)}
+                    onDelete={() => handleDelete(song)}
+                  />
+                ))}
+              </ul>
+            ) : !sharedSong ? (
+              <div className="flex flex-col items-center justify-center h-full px-8 text-center gap-3">
+                <div className="text-5xl">♪</div>
+                <p className="text-white/50 text-base">No songs yet.</p>
+                <p className="text-white/30 text-sm">Tap + to add your first.</p>
+              </div>
+            ) : null}
+          </>
         )}
       </main>
 

@@ -1,0 +1,12 @@
+{
+  "id": "shared-henna-2026",
+  "title": "ריקוד חינה",
+  "audioUrl": "/audio/Hinna-Shiraz-mixdown.mp3",
+  "duration": 0,
+  "cues": [
+    { "id": "c1", "label": "פתיחה", "timeSeconds": 0 },
+    { "id": "c2", "label": "ריקוד הורים", "timeSeconds": 60 },
+    { "id": "c3", "label": "ילדים", "timeSeconds": 120 }
+  ],
+  "updatedAt": 1745740800000
+}
